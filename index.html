@@ -83,7 +83,11 @@
       justify-content: center;
       overflow: hidden;
       color: var(--muted);
+      text-align: center;
+      padding: 16px;
     }
+    #stage.drag { outline: 3px dashed var(--accent); outline-offset: -3px; }
+    #stage:has(canvas, img) { padding: 0; }
     #stage canvas, #stage img { width: 100%; height: 100%; object-fit: cover; display: block; }
     #result { display: none; }
     #result .icon { font-size: 2.6rem; line-height: 1; }
@@ -110,6 +114,7 @@
       <label class="file-btn" id="fileLabel">🖼️ 사진 올리기
         <input type="file" id="fileInput" accept="image/*" disabled>
       </label>
+      <button id="pasteBtn" class="secondary">📋 붙여넣기</button>
     </div>
     <div id="stage">모델을 불러오는 중…</div>
     <div id="status"></div>
@@ -173,7 +178,7 @@
       model = await tmImage.load(MODEL_URL + "model.json", MODEL_URL + "metadata.json");
       maxPredictions = model.getTotalClasses();
       buildBars(model.getClassLabels());
-      stage.textContent = "카메라를 켜거나 사진을 올려주세요";
+      stage.textContent = "카메라를 켜거나, 사진을 올리거나, 여기에 붙여넣기(Ctrl+V)·끌어놓기 하세요";
       $("camBtn").disabled = false;
       $("fileInput").disabled = false;
     } catch (e) {
@@ -262,19 +267,74 @@
     await startCam();
   };
 
-  $("fileInput").onchange = (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
+  function classifySrc(src, isUrl) {
+    if (!model) return;
     stopCam();
     const img = new Image();
+    if (isUrl) img.crossOrigin = "anonymous";
     img.onload = async () => {
       stage.innerHTML = "";
       stage.appendChild(img);
-      await predict(img);
+      $("status").textContent = "";
+      try {
+        await predict(img);
+      } catch (e) {
+        console.error(e);
+        $("status").textContent = "이 사이트의 이미지는 분석할 수 없어요. 이미지를 우클릭 → '이미지 복사' 후 붙여넣어 주세요.";
+      }
     };
-    img.src = URL.createObjectURL(file);
+    img.onerror = () => {
+      $("status").textContent = "이미지를 불러오지 못했어요. 이미지를 우클릭 → '이미지 복사' 후 붙여넣어 주세요.";
+    };
+    img.src = src;
+  }
+
+  function classifyFile(file) {
+    if (file && file.type.startsWith("image/")) classifySrc(URL.createObjectURL(file), false);
+  }
+
+  // 붙여넣기 / 끌어놓기에서 이미지(파일 또는 주소)를 찾아 분석
+  function handleData(dt) {
+    const file = [...dt.files].find(f => f.type.startsWith("image/"));
+    if (file) return classifyFile(file), true;
+    const html = dt.getData("text/html");
+    const fromHtml = html && new DOMParser().parseFromString(html, "text/html").querySelector("img")?.src;
+    const text = (dt.getData("text/uri-list") || dt.getData("text/plain") || "").trim();
+    const url = fromHtml || (/^https?:\/\//.test(text) ? text : null);
+    if (url) return classifySrc(url, true), true;
+    return false;
+  }
+
+  $("fileInput").onchange = (e) => {
+    classifyFile(e.target.files[0]);
     e.target.value = "";
   };
+
+  document.addEventListener("paste", (e) => {
+    if (handleData(e.clipboardData)) e.preventDefault();
+    else $("status").textContent = "붙여넣은 내용에서 이미지를 찾지 못했어요.";
+  });
+
+  $("pasteBtn").onclick = async () => {
+    try {
+      const items = await navigator.clipboard.read();
+      for (const item of items) {
+        const type = item.types.find(t => t.startsWith("image/"));
+        if (type) return classifyFile(new File([await item.getType(type)], "paste", { type }));
+      }
+      $("status").textContent = "클립보드에 이미지가 없어요. 이미지를 우클릭 → '이미지 복사' 해주세요.";
+    } catch (e) {
+      $("status").textContent = "Ctrl+V(휴대폰은 길게 눌러 붙여넣기)로 붙여넣어 주세요.";
+    }
+  };
+
+  stage.addEventListener("dragover", (e) => { e.preventDefault(); stage.classList.add("drag"); });
+  stage.addEventListener("dragleave", () => stage.classList.remove("drag"));
+  stage.addEventListener("drop", (e) => {
+    e.preventDefault();
+    stage.classList.remove("drag");
+    handleData(e.dataTransfer);
+  });
 
   init();
 </script>
