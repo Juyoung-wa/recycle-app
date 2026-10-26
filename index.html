@@ -178,7 +178,7 @@
       model = await tmImage.load(MODEL_URL + "model.json", MODEL_URL + "metadata.json");
       maxPredictions = model.getTotalClasses();
       buildBars(model.getClassLabels());
-      stage.textContent = "카메라를 켜거나, 사진을 올리거나, 여기에 붙여넣기(Ctrl+V)·끌어놓기 하세요";
+      stage.textContent = "카메라를 켜거나, 사진을 올리거나, 다른 사이트의 사진을 이 페이지로 끌어오거나 붙여넣기(Ctrl+V) 하세요";
       $("camBtn").disabled = false;
       $("fileInput").disabled = false;
     } catch (e) {
@@ -267,25 +267,32 @@
     await startCam();
   };
 
-  function classifySrc(src, isUrl) {
+  // 다른 사이트 이미지가 막히면(CORS) 이미지 중계 서비스로 다시 시도
+  const PROXY = (url) => "https://wsrv.nl/?url=" + encodeURIComponent(url);
+
+  function classifySrc(src, isUrl, viaProxy = false) {
     if (!model) return;
     stopCam();
+    const retry = () => {
+      if (isUrl && !viaProxy && /^https?:/.test(src)) return classifySrc(PROXY(src), true, true), true;
+      $("status").textContent = "이 이미지는 불러올 수 없어요. 이미지를 우클릭 → '이미지 복사' 후 붙여넣어 주세요.";
+      return false;
+    };
+    $("status").textContent = "이미지를 불러오는 중…";
     const img = new Image();
     if (isUrl) img.crossOrigin = "anonymous";
     img.onload = async () => {
-      stage.innerHTML = "";
-      stage.appendChild(img);
-      $("status").textContent = "";
       try {
         await predict(img);
       } catch (e) {
         console.error(e);
-        $("status").textContent = "이 사이트의 이미지는 분석할 수 없어요. 이미지를 우클릭 → '이미지 복사' 후 붙여넣어 주세요.";
+        return retry();
       }
+      stage.innerHTML = "";
+      stage.appendChild(img);
+      $("status").textContent = "";
     };
-    img.onerror = () => {
-      $("status").textContent = "이미지를 불러오지 못했어요. 이미지를 우클릭 → '이미지 복사' 후 붙여넣어 주세요.";
-    };
+    img.onerror = retry;
     img.src = src;
   }
 
@@ -328,12 +335,16 @@
     }
   };
 
-  stage.addEventListener("dragover", (e) => { e.preventDefault(); stage.classList.add("drag"); });
-  stage.addEventListener("dragleave", () => stage.classList.remove("drag"));
-  stage.addEventListener("drop", (e) => {
+  // 페이지 어디에 끌어놓아도 동작
+  let dragDepth = 0;
+  document.addEventListener("dragenter", (e) => { e.preventDefault(); dragDepth++; stage.classList.add("drag"); });
+  document.addEventListener("dragover", (e) => e.preventDefault());
+  document.addEventListener("dragleave", () => { if (--dragDepth <= 0) { dragDepth = 0; stage.classList.remove("drag"); } });
+  document.addEventListener("drop", (e) => {
     e.preventDefault();
+    dragDepth = 0;
     stage.classList.remove("drag");
-    handleData(e.dataTransfer);
+    if (!handleData(e.dataTransfer)) $("status").textContent = "끌어놓은 내용에서 이미지를 찾지 못했어요.";
   });
 
   init();
